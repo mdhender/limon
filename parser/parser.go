@@ -298,6 +298,7 @@ func (p *Parser) processTemplate() string {
 		"%%\n};",
 		"static const char *const yyTokenName[] = { \n%%\n};",
 		"static const char *const yyRuleName[] = {\n%%\n};",
+		"%%fallback_table%%",
 		"/********* Begin destructor definitions ***************************************/\n%%\n",
 		"/******** Begin %stack_overflow code ******************************************/\n%%\n",
 		"/* For rule J, yyRuleInfoLhs[J] contains the symbol on the left-hand side\n** of that rule */\nstatic const YYCODETYPE yyRuleInfoLhs[] = {\n%%\n};",
@@ -367,8 +368,47 @@ func (p *Parser) generateDefines() string {
 
 // generateFallbacks generates the fallback table
 func (p *Parser) generateFallbacks() string {
-	// This would list fallback tokens
-	return "  0,  /* 0 = $ */\n"
+	// Check if any symbols have fallbacks
+	hasFallbacks := false
+	for _, sym := range p.Symbols {
+		if sym.IsTerminal && sym.Fallback != nil {
+			hasFallbacks = true
+			break
+		}
+	}
+	
+	// If no fallbacks, skip this section
+	if !hasFallbacks {
+		return "  0,  /* 0 = $ */\n"
+	}
+	
+	// Generate the YYFALLBACK define
+	result := "#define YYFALLBACK 1\n"
+	result += "static const YYCODETYPE yyFallback[] = {\n"
+	
+	// Sort terminal symbols by index to ensure deterministic output
+	terminals := make([]*Symbol, 0)
+	for _, sym := range p.Symbols {
+		if sym.IsTerminal {
+			terminals = append(terminals, sym)
+		}
+	}
+	sort.Slice(terminals, func(i, j int) bool {
+		return terminals[i].Index < terminals[j].Index
+	})
+	
+	// Generate the fallback table
+	for _, sym := range terminals {
+		if sym.Fallback != nil {
+			result += fmt.Sprintf("  %d,  /* %s => %s */\n", 
+				sym.Fallback.Index, sym.Name, sym.Fallback.Name)
+		} else {
+			result += fmt.Sprintf("  0,  /* %s */\n", sym.Name)
+		}
+	}
+	
+	result += "}; /* End of yyFallback[] */\n"
+	return result
 }
 
 // generateTokenNames generates the token name table
