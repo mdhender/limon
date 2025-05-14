@@ -11,11 +11,11 @@ import (
 func main() {
 	// Parse command-line flags similar to the original lemon tool
 	var (
-		baseFlagPtr := flag.Bool("b", false, "Show only the basis for each parser state")
-		noCompressFlagPtr := flag.Bool("c", false, "Do not compress action tables")
-		outputDirPtr := flag.String("d", "", "Output directory")
-		showHelpPtr := flag.Bool("?", false, "Show help")
-		showVersionPtr := flag.Bool("x", false, "Show version")
+		baseFlagPtr = flag.Bool("b", false, "Show only the basis for each parser state")
+		noCompressFlagPtr = flag.Bool("c", false, "Do not compress action tables")
+		outputDirPtr = flag.String("d", "", "Output directory")
+		showHelpPtr = flag.Bool("?", false, "Show help")
+		showVersionPtr = flag.Bool("x", false, "Show version")
 	)
 
 	flag.Parse()
@@ -43,6 +43,9 @@ func main() {
 	
 	// Create a new parser and process the grammar file
 	p := parser.New()
+	p.Basisflag = *baseFlagPtr
+	p.NoResort = *noCompressFlagPtr
+	p.Outdir = *outputDirPtr
 	err := p.GenerateParser(grammarFile)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)

@@ -33,15 +33,36 @@ type Rule struct {
 	Next       *Rule     // Next rule in the global list
 }
 
+// Configuration represents an LR(0) item in the grammar
+type Configuration struct {
+	Rp         *Rule    // The rule containing this configuration
+	Dot        int      // The position of the dot in the rule
+	FollowSet  []int    // Lookahead tokens
+	FwSet      []int    // Follow-set for this configuration
+	                    // (used during generation - final lookaheads go in FollowSet)
+	StkPos     int      // Stack position (used during config generation)
+	Index      int      // Index number for this configuration
+	BasisFlag  bool     // True if a basis configuration
+	RuleID     int      // ID number for the parent rule
+	Next       *Configuration // Linked list of configurations
+}
+
 // State represents a state in the finite state machine
 type State struct {
-	Bp         []int     // The basis configurations for this state
-	Configs    []int     // All configurations in this state
+	Configs    []*Configuration // All configurations in this state
+	BasisConfigs []*Configuration // Basis configurations for this state
 	StateNum   int       // Sequential number for this state
-	Action     []Action  // Array of actions for this state
-	NTAction   []Action  // Array of actions on non-terminals
-	Goto       []int     // Goto destinations for each non-terminal
+	Actions    []*Action // Array of actions for this state
+	NTActions  []*Action // Array of actions on non-terminals
+	Goto       map[*Symbol]*State // Goto destinations for symbols
 	Next       *State    // Linked list of states
+	BP         *State    // Backpointer to another state
+}
+
+// StateSet represents a set of states in the LR state machine
+type StateSet struct {
+	States     []*State // All states in the machine
+	NState     int      // Number of states
 }
 
 // Action is something that occurs when a token is encountered

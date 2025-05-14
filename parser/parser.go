@@ -742,8 +742,505 @@ func (p *Parser) processGrammar() error {
 
 // analyzeGrammar performs grammar analysis
 func (p *Parser) analyzeGrammar() error {
-	// TODO: Implement grammar analysis
+	// 1. Calculate the first sets for all non-terminals
+	err := p.calculateFirstSets()
+	if err != nil {
+		return err
+	}
+
+	// 2. Find symbols that can derive epsilon (empty string)
+	p.findNullableSymbols()
+
+	// 3. Build the LALR(1) state machine
+	err = p.buildStateMachine()
+	if err != nil {
+		return err
+	}
+
+	// 4. Check for conflicts and resolve if possible
+	p.resolveConflicts()
+
 	return nil
+}
+
+// calculateFirstSets computes the set of terminals that can appear at the
+// beginning of any string derived from a non-terminal
+func (p *Parser) calculateFirstSets() error {
+	// Initialize first sets for all symbols
+	for _, sym := range p.Symbols {
+		// Terminal symbols can only derive themselves
+		if sym.IsTerminal {
+			sym.FirstSet = []*Symbol{sym}
+		} else {
+			sym.FirstSet = make([]*Symbol, 0)
+		}
+	}
+
+	// Iteratively build the first sets until no more changes
+	changed := true
+	for changed {
+		changed = false
+
+		// For each rule X ::= Y1 Y2 ... Yn
+		for _, rule := range p.Rule {
+			lhs := rule.Lhs
+			
+			// If the rule has no RHS symbols, the LHS can derive epsilon
+			if len(rule.Rhs) == 0 {
+				lhs.Lambda = true
+				continue
+			}
+
+			// Look at the first symbol on the RHS
+			firstRHS := rule.Rhs[0]
+			
+			// Add all symbols from first(Y1) to first(X)
+			oldSize := len(lhs.FirstSet)
+			lhs.FirstSet = p.unionFirstSets(lhs.FirstSet, firstRHS.FirstSet)
+			if len(lhs.FirstSet) > oldSize {
+				changed = true
+			}
+			
+			// If Y1 can derive epsilon, add first(Y2) to first(X), and so on
+			i := 0
+			for i < len(rule.Rhs) && rule.Rhs[i].Lambda {
+				i++
+				if i < len(rule.Rhs) {
+					oldSize = len(lhs.FirstSet)
+					lhs.FirstSet = p.unionFirstSets(lhs.FirstSet, rule.Rhs[i].FirstSet)
+					if len(lhs.FirstSet) > oldSize {
+						changed = true
+					}
+				}
+			}
+			
+			// If all RHS symbols can derive epsilon, then LHS can derive epsilon
+			if i == len(rule.Rhs) {
+				lhs.Lambda = true
+				changed = true
+			}
+		}
+	}
+
+	return nil
+}
+
+// unionFirstSets creates a union of two sets of symbols
+func (p *Parser) unionFirstSets(set1, set2 []*Symbol) []*Symbol {
+	// Create a map for quick lookup
+	resultMap := make(map[*Symbol]bool)
+	
+	// Add all symbols from set1
+	for _, sym := range set1 {
+		resultMap[sym] = true
+	}
+	
+	// Add all symbols from set2
+	for _, sym := range set2 {
+		resultMap[sym] = true
+	}
+	
+	// Convert map back to slice
+	result := make([]*Symbol, 0, len(resultMap))
+	for sym := range resultMap {
+		result = append(result, sym)
+	}
+	
+	return result
+}
+
+// findNullableSymbols identifies symbols that can derive the empty string
+func (p *Parser) findNullableSymbols() {
+	// This has already been done during first set calculation
+	// but we double-check here
+	changed := true
+	for changed {
+		changed = false
+		
+		// Check each rule
+		for _, rule := range p.Rule {
+			// If the LHS is already nullable, skip
+			if rule.Lhs.Lambda {
+				continue
+			}
+			
+			// Empty RHS means the LHS is nullable
+			if len(rule.Rhs) == 0 {
+				rule.Lhs.Lambda = true
+				changed = true
+				continue
+			}
+			
+			// If all RHS symbols are nullable, the LHS is nullable
+			allNullable := true
+			for _, sym := range rule.Rhs {
+				if !sym.Lambda {
+					allNullable = false
+					break
+				}
+			}
+			
+			if allNullable {
+				rule.Lhs.Lambda = true
+				changed = true
+			}
+		}
+	}
+}
+
+// buildStateMachine constructs the LALR(1) state machine
+func (p *Parser) buildStateMachine() error {
+	// Initialize the state set
+	stateSet := &StateSet{
+		States: make([]*State, 0),
+		NState: 0,
+	}
+	
+	// Create the initial configurations (items) for the start state
+	initConfigs := p.createInitialConfigurations()
+
+	// Create the start state using the initial configurations
+	startState := p.createNewState(stateSet, initConfigs)
+	
+	// Initialize the state stack with the start state
+	stateStack := []*State{startState}
+
+	// Process each state in the stack until no more states are added
+	for len(stateStack) > 0 {
+		// Pop a state from the stack
+		state := stateStack[len(stateStack)-1]
+		stateStack = stateStack[:len(stateStack)-1]
+		
+		// Get the transitions out of this state
+		transitions := p.computeTransitions(state)
+		
+		// Create new states for each transition and add them to the stack
+		for sym, configs := range transitions {
+			// Check if this state already exists
+			newState := p.findOrCreateState(stateSet, configs)
+			
+			// Add the state to the stack if it's new
+			if newState.StateNum == stateSet.NState-1 {
+				stateStack = append(stateStack, newState)
+			}
+			
+			// Set the goto transition
+			if state.Goto == nil {
+				state.Goto = make(map[*Symbol]*State)
+			}
+			state.Goto[sym] = newState
+		}
+	}
+
+	// Set the state count in the parser
+	p.Nstate = stateSet.NState
+	
+	// Create the action tables for each state
+	p.createActionTables(stateSet)
+
+	return nil
+}
+
+// createInitialConfigurations creates the basis configurations for the start state
+func (p *Parser) createInitialConfigurations() []*Configuration {
+	configs := make([]*Configuration, 0)
+	
+	// Create a configuration for each rule where LHS is the start symbol
+	for _, rule := range p.Rule {
+		if rule.Lhs == p.StartSym {
+			// Create a new configuration with the dot at the beginning
+			config := &Configuration{
+				Rp:        rule,
+				Dot:       0,
+				FollowSet: make([]int, 0),
+				FwSet:     make([]int, 0),
+				BasisFlag: true,
+				RuleID:    rule.RuleNum,
+			}
+			
+			// Add the configuration to the list
+			configs = append(configs, config)
+		}
+	}
+
+	// Compute the closure of the configurations
+	configs = p.computeClosure(configs)
+
+	return configs
+}
+
+// createNewState creates a new state from a set of configurations
+func (p *Parser) createNewState(stateSet *StateSet, configs []*Configuration) *State {
+	// Create the new state
+	state := &State{
+		Configs:      configs,
+		BasisConfigs: p.findBasisConfigs(configs),
+		StateNum:     stateSet.NState,
+		Actions:      make([]*Action, 0),
+		NTActions:    make([]*Action, 0),
+		Goto:         make(map[*Symbol]*State),
+	}
+
+	// Add the state to the state set
+	stateSet.States = append(stateSet.States, state)
+	stateSet.NState++
+
+	return state
+}
+
+// findBasisConfigs extracts the basis configurations from a set of configs
+func (p *Parser) findBasisConfigs(configs []*Configuration) []*Configuration {
+	basisConfigs := make([]*Configuration, 0)
+	
+	for _, config := range configs {
+		if config.BasisFlag {
+			basisConfigs = append(basisConfigs, config)
+		}
+	}
+	
+	return basisConfigs
+}
+
+// computeTransitions calculates the transitions from a state
+func (p *Parser) computeTransitions(state *State) map[*Symbol][]*Configuration {
+	transitions := make(map[*Symbol][]*Configuration)
+	
+	// Group configurations by the symbol after the dot
+	for _, config := range state.Configs {
+		// Skip if the dot is at the end of the rule
+		if config.Dot >= len(config.Rp.Rhs) {
+			continue
+		}
+		
+		// Get the symbol after the dot
+		sym := config.Rp.Rhs[config.Dot]
+		
+		// Create a new configuration with the dot advanced
+		newConfig := &Configuration{
+			Rp:        config.Rp,
+			Dot:       config.Dot + 1,
+			FollowSet: make([]int, len(config.FollowSet)),
+			FwSet:     make([]int, len(config.FwSet)),
+			BasisFlag: true,  // This is a basis config for the new state
+			RuleID:    config.RuleID,
+		}
+		copy(newConfig.FollowSet, config.FollowSet)
+		copy(newConfig.FwSet, config.FwSet)
+		
+		// Add the configuration to the appropriate transition
+		if transitions[sym] == nil {
+			transitions[sym] = make([]*Configuration, 0)
+		}
+		transitions[sym] = append(transitions[sym], newConfig)
+	}
+	
+	// Compute closure for each transition
+	for sym, configs := range transitions {
+		transitions[sym] = p.computeClosure(configs)
+	}
+	
+	return transitions
+}
+
+// computeClosure calculates the closure of a set of LR items
+func (p *Parser) computeClosure(configs []*Configuration) []*Configuration {
+	// Make a copy of the configurations to avoid modifying the input
+	result := make([]*Configuration, len(configs))
+	copy(result, configs)
+	
+	// Keep adding configurations until no more can be added
+	changed := true
+	for changed {
+		changed = false
+		oldSize := len(result)
+		
+		// Check each configuration
+		for _, config := range result {
+			// If the dot is at the end, skip
+			if config.Dot >= len(config.Rp.Rhs) {
+				continue
+			}
+			
+			// Get the symbol after the dot
+			sym := config.Rp.Rhs[config.Dot]
+			
+			// If it's a terminal, skip
+			if sym.IsTerminal {
+				continue
+			}
+			
+			// For each rule with this non-terminal as LHS
+			for _, rule := range p.Rule {
+				if rule.Lhs != sym {
+					continue
+				}
+				
+				// Create a new configuration with the dot at the beginning
+				newConfig := &Configuration{
+					Rp:        rule,
+					Dot:       0,
+					FollowSet: make([]int, 0), // Will compute later
+					FwSet:     make([]int, 0),  // Will compute later
+					BasisFlag: false, // This is not a basis config
+					RuleID:    rule.RuleNum,
+				}
+				
+				// Check if this configuration already exists
+				exists := false
+				for _, existing := range result {
+					if existing.Rp == newConfig.Rp && existing.Dot == newConfig.Dot {
+						exists = true
+						break
+					}
+				}
+				
+				// Add the configuration if it's new
+				if !exists {
+					result = append(result, newConfig)
+				}
+			}
+		}
+		
+		// Check if we added new configurations
+		if len(result) > oldSize {
+			changed = true
+		}
+	}
+	
+	return result
+}
+
+// findOrCreateState finds an existing state or creates a new one
+func (p *Parser) findOrCreateState(stateSet *StateSet, configs []*Configuration) *State {
+	// Try to find an existing state with the same basis configurations
+	for _, state := range stateSet.States {
+		if p.sameConfigs(p.findBasisConfigs(configs), state.BasisConfigs) {
+			// Found a matching state, return it
+			return state
+		}
+	}
+	
+	// No matching state found, create a new one
+	return p.createNewState(stateSet, configs)
+}
+
+// sameConfigs checks if two sets of configurations are the same
+func (p *Parser) sameConfigs(configs1, configs2 []*Configuration) bool {
+	if len(configs1) != len(configs2) {
+		return false
+	}
+	
+	// Create maps for quick lookups
+	map1 := make(map[string]bool)
+	map2 := make(map[string]bool)
+	
+	// Add all configs from the first set to map1
+	for _, config := range configs1 {
+		key := fmt.Sprintf("%d:%d", config.RuleID, config.Dot)
+		map1[key] = true
+	}
+	
+	// Add all configs from the second set to map2
+	for _, config := range configs2 {
+		key := fmt.Sprintf("%d:%d", config.RuleID, config.Dot)
+		map2[key] = true
+	}
+	
+	// Check if every key in map1 is also in map2
+	for key := range map1 {
+		if !map2[key] {
+			return false
+		}
+	}
+	
+	// Check if every key in map2 is also in map1
+	for key := range map2 {
+		if !map1[key] {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// createActionTables creates the action tables for each state
+func (p *Parser) createActionTables(stateSet *StateSet) {
+	// For each state in the state machine
+	for _, state := range stateSet.States {
+		// Create action table for this state
+		p.createActionsForState(state)
+	}
+}
+
+// createActionsForState creates the action table for a single state
+func (p *Parser) createActionsForState(state *State) {
+	// Process each configuration in the state
+	for _, config := range state.Configs {
+		// If the dot is at the end, this is a reduce action
+		if config.Dot >= len(config.Rp.Rhs) {
+			// Create a reduce action for each symbol in the follow set
+			for _, followIdx := range config.FollowSet {
+				// Find the symbol with this index
+				var followSym *Symbol
+				for _, sym := range p.Symbols {
+					if sym.Index == followIdx {
+						followSym = sym
+						break
+					}
+				}
+				
+				// Create the appropriate action
+				if config.Rp.Lhs == p.StartSym && len(config.Rp.Rhs) == 1 && 
+				   followSym == nil {
+					// Accept action (start symbol and followSym is end-of-input)
+					action := &Action{
+						Sp:   nil, // End of input
+						Type: ACCEPT,
+						X:    0,
+					}
+					state.Actions = append(state.Actions, action)
+				} else {
+					// Regular reduce action
+					action := &Action{
+						Sp:   followSym,
+						Type: REDUCE,
+						X:    config.Rp.RuleNum,
+					}
+					state.Actions = append(state.Actions, action)
+				}
+			}
+		} else {
+			// The dot is not at the end, so this could be a shift action
+			sym := config.Rp.Rhs[config.Dot]
+			
+			// If the symbol is a terminal and there's a goto transition
+			if sym.IsTerminal && state.Goto[sym] != nil {
+				// Create a shift action
+				action := &Action{
+					Sp:   sym,
+					Type: SHIFT,
+					X:    state.Goto[sym].StateNum,
+				}
+				state.Actions = append(state.Actions, action)
+			}
+			
+			// If the symbol is a non-terminal and there's a goto transition
+			if !sym.IsTerminal && state.Goto[sym] != nil {
+				// Create a goto action
+				action := &Action{
+					Sp:   sym,
+					Type: SHIFT, // Re-using SHIFT type for goto
+					X:    state.Goto[sym].StateNum,
+				}
+				state.NTActions = append(state.NTActions, action)
+			}
+		}
+	}
+}
+
+// resolveConflicts resolves shift-reduce and reduce-reduce conflicts
+func (p *Parser) resolveConflicts() {
+	// TODO: Implement conflict resolution using precedence rules
 }
 
 // handleSyntaxError processes the %syntax_error directive
