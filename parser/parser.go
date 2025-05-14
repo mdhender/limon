@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -46,6 +47,7 @@ type Parser struct {
 	TokenPrefix    string  // Prefix for token names
 	TokenType      string  // Type of terminal symbols
 	Vartype        string  // The default value of VARTYPE
+	StateSet       *StateSet // The set of states in the LALR(1) state machine
 
 	// Directive values
 	IncludeCode       string // Code from %include directive
@@ -891,7 +893,7 @@ func (p *Parser) findNullableSymbols() {
 // buildStateMachine constructs the LALR(1) state machine
 func (p *Parser) buildStateMachine() error {
 	// Initialize the state set
-	stateSet := &StateSet{
+	p.StateSet = &StateSet{
 		States: make([]*State, 0),
 		NState: 0,
 	}
@@ -900,7 +902,7 @@ func (p *Parser) buildStateMachine() error {
 	initConfigs := p.createInitialConfigurations()
 
 	// Create the start state using the initial configurations
-	startState := p.createNewState(stateSet, initConfigs)
+	startState := p.createNewState(p.StateSet, initConfigs)
 	
 	// Initialize the state stack with the start state
 	stateStack := []*State{startState}
@@ -917,10 +919,10 @@ func (p *Parser) buildStateMachine() error {
 		// Create new states for each transition and add them to the stack
 		for sym, configs := range transitions {
 			// Check if this state already exists
-			newState := p.findOrCreateState(stateSet, configs)
+			newState := p.findOrCreateState(p.StateSet, configs)
 			
 			// Add the state to the stack if it's new
-			if newState.StateNum == stateSet.NState-1 {
+			if newState.StateNum == p.StateSet.NState-1 {
 				stateStack = append(stateStack, newState)
 			}
 			
@@ -933,10 +935,10 @@ func (p *Parser) buildStateMachine() error {
 	}
 
 	// Set the state count in the parser
-	p.Nstate = stateSet.NState
+	p.Nstate = p.StateSet.NState
 	
 	// Create the action tables for each state
-	p.createActionTables(stateSet)
+	p.createActionTables(p.StateSet)
 
 	return nil
 }
@@ -1240,7 +1242,168 @@ func (p *Parser) createActionsForState(state *State) {
 
 // resolveConflicts resolves shift-reduce and reduce-reduce conflicts
 func (p *Parser) resolveConflicts() {
-	// TODO: Implement conflict resolution using precedence rules
+	// Initialize conflict counters
+	shiftReduceCount := 0
+	reduceReduceCount := 0
+	resolvedCount := 0
+
+	// If we don't have any states yet, return early
+	if p.StateSet == nil || len(p.StateSet.States) == 0 {
+		return
+	}
+
+	// Loop through all states
+	for _, state := range p.StateSet.States {
+		// Organize actions by symbol
+		actions := make(map[*Symbol][]*Action)
+		for _, action := range state.Actions {
+			sp := action.Sp
+			if actions[sp] == nil {
+				actions[sp] = make([]*Action, 0)
+			}
+			actions[sp] = append(actions[sp], action)
+		}
+
+		// Look for symbols with multiple actions (conflicts)
+		for sp, actList := range actions {
+			if len(actList) <= 1 {
+				continue // No conflict for this symbol
+			}
+
+			// We have a conflict for this symbol
+			var shiftAct []*Action
+			var reduceAct []*Action
+
+			// Classify actions as shift or reduce
+			for _, act := range actList {
+				if act.Type == SHIFT {
+					shiftAct = append(shiftAct, act)
+				} else if act.Type == REDUCE {
+					reduceAct = append(reduceAct, act)
+				}
+			}
+
+			// Handle shift-reduce conflicts
+			if len(shiftAct) > 0 && len(reduceAct) > 0 {
+				shiftReduceCount += len(shiftAct) * len(reduceAct)
+				
+				// For each shift-reduce conflict
+				for _, shift := range shiftAct {
+					for i := 0; i < len(reduceAct); i++ {
+						reduce := reduceAct[i]
+						
+						// Find the rule being reduced
+						rule := p.Rule[reduce.X]
+						
+						// Check if the rule has a precedence
+						rulePrec := -1
+						if rule.Precedence != nil {
+							rulePrec = rule.Precedence.Prec
+						}
+						
+						// Get the token precedence
+						tokenPrec := -1
+						if sp != nil {
+							tokenPrec = sp.Prec
+						}
+						
+						// If both have precedence, we can resolve the conflict
+						if rulePrec >= 0 && tokenPrec >= 0 {
+							resolvedCount++
+							
+							// Decide based on precedence
+							if rulePrec > tokenPrec {
+								// Rule has higher precedence, remove the shift action
+								p.removeAction(state, shift)
+							} else if tokenPrec > rulePrec {
+								// Token has higher precedence, remove the reduce action
+								p.removeAction(state, reduce)
+								reduceAct = append(reduceAct[:i], reduceAct[i+1:]...)
+								i-- // Adjust the index after removal
+							} else {
+								// Same precedence, use associativity
+								assoc := sp.Assoc
+								if assoc == LEFT {
+									// Left associativity -> reduce (remove shift)
+									p.removeAction(state, shift)
+								} else if assoc == RIGHT {
+									// Right associativity -> shift (remove reduce)
+									p.removeAction(state, reduce)
+									reduceAct = append(reduceAct[:i], reduceAct[i+1:]...)
+									i-- // Adjust the index after removal
+								} else if assoc == NONASSOC {
+									// Non-associative -> syntax error (remove both)
+									p.removeAction(state, shift)
+									p.removeAction(state, reduce)
+									reduceAct = append(reduceAct[:i], reduceAct[i+1:]...)
+									i-- // Adjust the index after removal
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Handle reduce-reduce conflicts
+			if len(reduceAct) > 1 {
+				reduceReduceCount += len(reduceAct) - 1
+				
+				// Sort reduce actions by rule precedence and rule position
+				p.sortReduceActions(reduceAct)
+				
+				// Keep only the first (highest precedence) reduction
+				for i := 1; i < len(reduceAct); i++ {
+					p.removeAction(state, reduceAct[i])
+				}
+			}
+		}
+	}
+
+	// Print conflict resolution statistics if showing precedence conflicts
+	if p.ShowPrecedence {
+		fmt.Printf("\nConflicts resolved:\n")
+		fmt.Printf("  %d shift-reduce conflicts\n", shiftReduceCount)
+		fmt.Printf("  %d reduce-reduce conflicts\n", reduceReduceCount)
+		fmt.Printf("  %d conflicts resolved using precedence rules\n", resolvedCount)
+	}
+}
+
+// removeAction removes an action from a state's action list
+func (p *Parser) removeAction(state *State, action *Action) {
+	// Find and remove the action from the state's action list
+	for i, act := range state.Actions {
+		if act == action {
+			state.Actions = append(state.Actions[:i], state.Actions[i+1:]...)
+			break
+		}
+	}
+}
+
+// sortReduceActions sorts reduce actions by precedence and rule position
+func (p *Parser) sortReduceActions(actions []*Action) {
+	// Sort by precedence (highest first) and then by rule index (lowest first)
+	sort.Slice(actions, func(i, j int) bool {
+		rule1 := p.Rule[actions[i].X]
+		rule2 := p.Rule[actions[j].X]
+		
+		// Get rule precedences
+		prec1 := -1
+		if rule1.Precedence != nil {
+			prec1 = rule1.Precedence.Prec
+		}
+		prec2 := -1
+		if rule2.Precedence != nil {
+			prec2 = rule2.Precedence.Prec
+		}
+		
+		// Compare by precedence
+		if prec1 != prec2 {
+			return prec1 > prec2 // Higher precedence first
+		}
+		
+		// If same precedence, compare by rule index
+		return rule1.Index < rule2.Index // Lower index first (earlier in grammar)
+	})
 }
 
 // handleSyntaxError processes the %syntax_error directive
