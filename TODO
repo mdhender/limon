@@ -18,10 +18,10 @@ Here are the key steps left to complete the Lemon parser generator Go implementa
 5.1. Enhance error detection in grammar files
 5.2. Implement better error messages for grammar conflicts
 6. Documentation
-6.1. Add comprehensive Go documentation
-6.2. Add examples of how to use the tool
-6.3. Document special cases like fallback tokens, epsilon productions, and wildcard tokens
-6.4. Add template customization guidelines (especially for preserving special features)
+6.1. ✅ Add comprehensive Go documentation
+6.2. ✅ Add examples of how to use the tool
+6.3. ✅ Document special cases like fallback tokens, epsilon productions, and wildcard tokens
+6.4. ✅ Add template customization guidelines (especially for preserving special features)
 7. Special Cases
 7.1. ✅ Complete support for wildcard tokens
 7.2. ✅ Fully implement fallback tokens

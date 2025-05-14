@@ -1,16 +1,24 @@
+// Package parser implements the Lemon LALR(1) parser generator in Go
+// 
+// This package contains the core functionality of the Lemon parser generator,
+// including grammar parsing, state machine construction, parsing table generation,
+// and code output generation. It provides a complete, compatible implementation
+// of the Lemon parser generator originally written in C.
 package parser
 
 // Symbol represents a terminal or non-terminal symbol in the grammar
+// Terminal symbols start with an uppercase letter (e.g., TOKEN, ID, NUMBER)
+// Non-terminal symbols start with a lowercase letter (e.g., expr, stmt, program)
 type Symbol struct {
 	Name       string  // Name of the symbol
 	Index      int     // Index number for this symbol
 	Type       string  // Declared type of this symbol
 	Rule       *Rule   // Linked list of rules that use this symbol
-	Fallback   *Symbol // Fallback token in case this token doesn't parse
+	Fallback   *Symbol // Fallback token in case this token doesn't parse (used for %fallback directive)
 	Prec       int     // Precedence if defined (-1 otherwise)
 	Assoc      int     // Associativity if precedence is defined
 	FirstSet   []*Symbol // First-set for all rules of this symbol
-	Lambda     bool    // True if NT can generate an empty string
+	Lambda     bool    // True if NT can generate an empty string (used for epsilon productions)
 	Destructor string  // Code which executes whenever this symbol is popped
 	Dtnum      int     // Number which determines destructor action
 	IsTerminal bool    // True for terminal symbols, false for non-terminals

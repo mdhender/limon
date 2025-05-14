@@ -20,6 +20,9 @@ const (
 )
 
 // Parser represents the lemon parser generator
+// It contains the entire state of the parser generator, including the grammar,
+// configuration options, and the parser state machine. This is the main type
+// used to parse grammar files and generate parser code.
 type Parser struct {
 	// Parser configuration
 	Basisflag      bool   // Output only basis configurations
@@ -742,6 +745,10 @@ func (p *Parser) handleDefaultType(args string) error {
 }
 
 // handleFallback processes the %fallback directive
+// The %fallback directive allows specifying alternative tokens to try when
+// a syntax error occurs. The syntax is: %fallback ID TOKEN TOKEN...
+// where ID is the fallback token and subsequent tokens fall back to ID.
+// This is particularly useful for handling keywords that could also be identifiers.
 func (p *Parser) handleFallback(args string) error {
 	// The fallback directive takes the form: %fallback ID TOKEN TOKEN...
 	// First token is the fallback token, followed by tokens that fall back to it
@@ -1149,6 +1156,10 @@ func (p *Parser) unionFirstSets(set1, set2 []*Symbol) []*Symbol {
 }
 
 // findNullableSymbols identifies symbols that can derive the empty string
+// This function is crucial for handling epsilon productions (rules with empty RHS).
+// It marks non-terminals that can derive the empty string by setting their Lambda flag.
+// A symbol can derive the empty string either directly (through an empty rule)
+// or indirectly (if all symbols on its RHS can derive the empty string).
 func (p *Parser) findNullableSymbols() {
 	// This has already been done during first set calculation
 	// but we double-check here
@@ -2003,6 +2014,10 @@ func (p *Parser) handleStackSize(args string) error {
 }
 
 // handleWildcard processes the %wildcard directive
+// The %wildcard directive specifies a token that can match any input token
+// when a syntax error would otherwise occur. This provides a catch-all mechanism
+// for handling unexpected input. The syntax is: %wildcard TOKEN.
+// Wildcard tokens are only used when no other match is possible.
 func (p *Parser) handleWildcard(args string) error {
 	// The wildcard directive takes the form: %wildcard TOKEN.
 	// It specifies a token that matches any input token
