@@ -63,6 +63,7 @@ type Parser struct {
 
 	// Path names
 	TemplateFilename string // The template file name
+	TemplateContent  string // Content of the template file
 	OutputFilename   string // The output file name
 	HeaderFilename   string // The header file name
 	ReportFilename   string // The report file name
@@ -96,15 +97,33 @@ func (p *Parser) GenerateParser(grammarFile string) error {
 	p.HeaderFilename = filepath.Join(outputDir, baseFilename+".h")
 	p.ReportFilename = filepath.Join(outputDir, baseFilename+".out")
 
-	// Set template file path
-	if filepath.IsAbs(p.TemplateFile) {
-		p.TemplateFilename = p.TemplateFile
+	// Set template file path and load template content
+	var err error
+	if p.TemplateFile != "" {
+		// Use user-specified template file
+		if filepath.IsAbs(p.TemplateFile) {
+			p.TemplateFilename = p.TemplateFile
+		} else {
+			p.TemplateFilename = filepath.Join(filepath.Dir(grammarFile), p.TemplateFile)
+		}
+
+		// Read user template file
+		templateData, err := os.ReadFile(p.TemplateFilename)
+		if err != nil {
+			return fmt.Errorf("error reading template file: %v", err)
+		}
+		p.TemplateContent = string(templateData)
 	} else {
-		p.TemplateFilename = filepath.Join(filepath.Dir(grammarFile), p.TemplateFile)
+		// Use the embedded template
+		p.TemplateContent, err = GetDefaultTemplate()
+		if err != nil {
+			return fmt.Errorf("error reading embedded template: %v", err)
+		}
+		p.TemplateFilename = "embedded lempar.c"
 	}
 
 	// Parse the grammar file
-	err := p.parseGrammar()
+	err = p.parseGrammar()
 	if err != nil {
 		return fmt.Errorf("error parsing grammar: %v", err)
 	}
@@ -220,13 +239,6 @@ func (p *Parser) writeOutput() error {
 
 // generateParserCode generates the C parser implementation
 func (p *Parser) generateParserCode() error {
-	// Open the template file
-	tpl, err := os.Open(p.TemplateFile)
-	if err != nil {
-		return fmt.Errorf("cannot open template file: %v", err)
-	}
-	defer tpl.Close()
-
 	// Open the output file
 	outputFile, err := os.Create(p.OutputFilename)
 	if err != nil {
@@ -234,9 +246,209 @@ func (p *Parser) generateParserCode() error {
 	}
 	defer outputFile.Close()
 
-	// TODO: Process template and generate parser
+	// Process the template
+	output := p.processTemplate()
+
+	// Write the output to the file
+	_, err = outputFile.WriteString(output)
+	if err != nil {
+		return fmt.Errorf("error writing output file: %v", err)
+	}
 
 	return nil
+}
+
+// processTemplate replaces variables in the template with their actual values
+func (p *Parser) processTemplate() string {
+	// Make a copy of the template content
+	result := p.TemplateContent
+
+	// Replace %% markers with content
+	splitPoints := []string{
+		"/************ Begin %include sections from the grammar ************************/\n%%\n",
+		"/**************** End token definitions ***************************************/\n\n%%\n",
+		"/*********** Begin parsing tables **********************************************/\n%%\n",
+		"%%\n};",
+		"static const char *const yyTokenName[] = { \n%%\n};",
+		"static const char *const yyRuleName[] = {\n%%\n};",
+		"/********* Begin destructor definitions ***************************************/\n%%\n",
+		"/******** Begin %stack_overflow code ******************************************/\n%%\n",
+		"/* For rule J, yyRuleInfoLhs[J] contains the symbol on the left-hand side\n** of that rule */\nstatic const YYCODETYPE yyRuleInfoLhs[] = {\n%%\n};",
+		"/* For rule J, yyRuleInfoNRhs[J] contains the negative of the number\n** of symbols on the right-hand side of that rule. */\nstatic const signed char yyRuleInfoNRhs[] = {\n%%\n};",
+		"/********** Begin reduce actions **********************************************/\n%%\n",
+		"/************ Begin %parse_failure code ***************************************/\n%%\n",
+		"/************ Begin %syntax_error code ****************************************/\n%%\n",
+		"/*********** Begin %parse_accept code *****************************************/\n%%\n",
+	}
+
+	// Content to replace the markers
+	replacements := []string{
+		p.generateIncludeCode(),       // %include sections
+		p.generateDefines(),           // Control #defines
+		p.generateParsingTables(),     // Parsing tables
+		p.generateFallbacks(),         // Fallbacks
+		p.generateTokenNames(),        // Token names
+		p.generateRuleNames(),         // Rule names
+		p.generateDestructors(),       // Destructors
+		p.generateStackOverflow(),     // Stack overflow handling
+		p.generateRuleInfoLhs(),       // Rule LHS info
+		p.generateRuleInfoNRhs(),      // Rule RHS count info
+		p.generateReduceActions(),     // Reduce actions
+		p.generateParseFailure(),      // Parse failure code
+		p.generateSyntaxError(),       // Syntax error code
+		p.generateParseAccept(),       // Parse accept code
+	}
+
+	// Do the replacements
+	for i, marker := range splitPoints {
+		if i < len(replacements) {
+			result = strings.Replace(result, marker, strings.Replace(marker, "%%\n", replacements[i]+"\n", 1), 1)
+		}
+	}
+
+	// Replace P-a-r-s-e with the actual parser name
+	result = strings.ReplaceAll(result, "Parse", p.Name)
+
+	return result
+}
+
+// generateIncludeCode generates the include sections from the grammar
+func (p *Parser) generateIncludeCode() string {
+	return p.IncludeCode
+}
+
+// generateDefines generates the control #defines section
+func (p *Parser) generateDefines() string {
+	// This would generate YYCODETYPE, YYNOCODE, etc.
+	result := "/* These constants specify the various numeric values for terminal symbols\n"
+	result += "** and nonterminal symbols, as well as the action codes used\n"
+	result += "** in the action table */\n"
+	return result
+}
+
+// generateParsingTables generates the parsing tables
+func (p *Parser) generateParsingTables() string {
+	// This would generate action tables, lookahead tables, etc.
+	result := "/* The action table */\n"
+	result += "static const YYACTIONTYPE yy_action[] = {\n"
+	// TODO: Generate the actual action table
+	result += "  0,  /* 0 */\n"
+	result += "};\n\n"
+	return result
+}
+
+// generateFallbacks generates the fallback table
+func (p *Parser) generateFallbacks() string {
+	// This would list fallback tokens
+	return "  0,  /* 0 = $ */\n"
+}
+
+// generateTokenNames generates the token name table
+func (p *Parser) generateTokenNames() string {
+	// Generate the token name table
+	result := ""
+	for _, sym := range p.Symbols {
+		if sym.IsTerminal {
+			result += fmt.Sprintf("  \"%s\",\n", sym.Name)
+		}
+	}
+	return result
+}
+
+// generateRuleNames generates the rule name table
+func (p *Parser) generateRuleNames() string {
+	// Generate the rule name table
+	result := ""
+	for _, rule := range p.Rule {
+		result += fmt.Sprintf("  \"%s ::= ", rule.Lhs.Name)
+		for _, sym := range rule.Rhs {
+			result += sym.Name + " "
+		}
+		result += "\",\n"
+	}
+	return result
+}
+
+// generateDestructors generates the destructor code
+func (p *Parser) generateDestructors() string {
+	// This would generate token and non-terminal destructors
+	result := ""
+	if p.TokenDestructor != "" {
+		result += "/* Default destructor for terminals */\n"
+		result += p.TokenDestructor + "\n"
+	}
+	if p.DefaultDestructor != "" {
+		result += "/* Default destructor for non-terminals */\n"
+		result += p.DefaultDestructor + "\n"
+	}
+	return result
+}
+
+// generateStackOverflow generates the stack overflow handling code
+func (p *Parser) generateStackOverflow() string {
+	if p.StackOverflow != "" {
+		return p.StackOverflow
+	}
+	return ""
+}
+
+// generateRuleInfoLhs generates the rule left-hand side information
+func (p *Parser) generateRuleInfoLhs() string {
+	// Generate left-hand side information for each rule
+	result := ""
+	for _, rule := range p.Rule {
+		result += fmt.Sprintf("  %d,  /* (%d) %s ::= */\n", rule.Lhs.Index, rule.RuleNum, rule.Lhs.Name)
+	}
+	return result
+}
+
+// generateRuleInfoNRhs generates the rule right-hand side count information
+func (p *Parser) generateRuleInfoNRhs() string {
+	// Generate right-hand side count information for each rule
+	result := ""
+	for _, rule := range p.Rule {
+		result += fmt.Sprintf("  -%d,  /* (%d) %s ::= */\n", len(rule.Rhs), rule.RuleNum, rule.Lhs.Name)
+	}
+	return result
+}
+
+// generateReduceActions generates the reduce actions
+func (p *Parser) generateReduceActions() string {
+	// Generate code for reduce actions
+	result := ""
+	for i, rule := range p.Rule {
+		result += fmt.Sprintf("  case %d: /* (%d) %s ::= ", i, rule.RuleNum, rule.Lhs.Name)
+		for _, sym := range rule.Rhs {
+			result += sym.Name + " "
+		}
+		result += "*/\n"
+		result += "    break;\n"
+	}
+	return result
+}
+
+// generateParseFailure generates the parse failure code
+func (p *Parser) generateParseFailure() string {
+	if p.ParseFailure != "" {
+		return p.ParseFailure
+	}
+	return ""
+}
+
+// generateSyntaxError generates the syntax error code
+func (p *Parser) generateSyntaxError() string {
+	if p.SyntaxError != "" {
+		return p.SyntaxError
+	}
+	return ""
+}
+
+// generateParseAccept generates the parse accept code
+func (p *Parser) generateParseAccept() string {
+	if p.ParseAccept != "" {
+		return p.ParseAccept
+	}
+	return ""
 }
 
 // generateHeaderFile generates the header file with token definitions

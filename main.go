@@ -14,6 +14,7 @@ func main() {
 		baseFlagPtr = flag.Bool("b", false, "Show only the basis for each parser state")
 		noCompressFlagPtr = flag.Bool("c", false, "Do not compress action tables")
 		outputDirPtr = flag.String("d", "", "Output directory")
+		templateFilePtr = flag.String("T", "", "Template file (if not specified, uses embedded template)")
 		showHelpPtr = flag.Bool("?", false, "Show help")
 		showVersionPtr = flag.Bool("x", false, "Show version")
 	)
@@ -46,6 +47,7 @@ func main() {
 	p.Basisflag = *baseFlagPtr
 	p.NoResort = *noCompressFlagPtr
 	p.Outdir = *outputDirPtr
+	p.TemplateFile = *templateFilePtr
 	err := p.GenerateParser(grammarFile)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
