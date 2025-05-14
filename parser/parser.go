@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -46,6 +47,18 @@ type Parser struct {
 	TokenType      string  // Type of terminal symbols
 	Vartype        string  // The default value of VARTYPE
 
+	// Directive values
+	IncludeCode       string // Code from %include directive
+	ExtraCode         string // Code from %code directive
+	ExtraArgument     string // Type from %extra_argument directive
+	TokenDestructor   string // Code from %token_destructor directive
+	DefaultDestructor string // Code from %default_destructor directive
+	SyntaxError       string // Code from %syntax_error directive
+	ParseAccept       string // Code from %parse_accept directive
+	ParseFailure      string // Code from %parse_failure directive
+	StackOverflow     string // Code from %stack_overflow directive
+	StackSize         int    // Value from %stack_size directive (default: 100)
+
 	// Path names
 	TemplateFilename string // The template file name
 	OutputFilename   string // The output file name
@@ -61,6 +74,7 @@ func New() *Parser {
 		Symbols:      make([]*Symbol, 0),
 		TokenType:    "void*", // Default token type
 		Vartype:      "void*", // Default vartype
+		StackSize:    100,     // Default stack size
 	}
 }
 
@@ -387,45 +401,33 @@ func (p *Parser) parseDirective(line string, lineNo int) error {
 	case "start_symbol":
 		return p.handleStartSymbol(directiveArgs)
 	case "syntax_error":
-		// TODO: Handle syntax_error directive
-		return nil
+		return p.handleSyntaxError(directiveArgs)
 	case "parse_accept":
-		// TODO: Handle parse_accept directive
-		return nil
+		return p.handleParseAccept(directiveArgs)
 	case "parse_failure":
-		// TODO: Handle parse_failure directive
-		return nil
+		return p.handleParseFailure(directiveArgs)
 	case "stack_overflow":
-		// TODO: Handle stack_overflow directive
-		return nil
+		return p.handleStackOverflow(directiveArgs)
 	case "extra_argument":
-		// TODO: Handle extra_argument directive
-		return nil
+		return p.handleExtraArgument(directiveArgs)
 	case "token_destructor":
-		// TODO: Handle token_destructor directive
-		return nil
+		return p.handleTokenDestructor(directiveArgs)
 	case "default_destructor":
-		// TODO: Handle default_destructor directive
-		return nil
+		return p.handleDefaultDestructor(directiveArgs)
 	case "destructor":
-		// TODO: Handle destructor directive
-		return nil
+		return p.handleDestructor(directiveArgs)
 	case "token_prefix":
 		return p.handleTokenPrefix(directiveArgs)
 	case "include":
-		// TODO: Handle include directive
-		return nil
+		return p.handleInclude(directiveArgs)
 	case "code":
-		// TODO: Handle code directive
-		return nil
+		return p.handleCode(directiveArgs)
 	case "name":
 		return p.handleName(directiveArgs)
 	case "stack_size":
-		// TODO: Handle stack_size directive
-		return nil
+		return p.handleStackSize(directiveArgs)
 	case "wildcard":
-		// TODO: Handle wildcard directive
-		return nil
+		return p.handleWildcard(directiveArgs)
 	default:
 		return fmt.Errorf("unknown directive %%%s", directiveName)
 	}
@@ -453,7 +455,33 @@ func (p *Parser) handleDefaultType(args string) error {
 
 // handleFallback processes the %fallback directive
 func (p *Parser) handleFallback(args string) error {
-	// TODO: Implement fallback directive handler
+	// The fallback directive takes the form: %fallback ID TOKEN TOKEN...
+	// First token is the fallback token, followed by tokens that fall back to it
+	parts := strings.Split(args, ".")
+	if len(parts) < 1 {
+		return fmt.Errorf("missing period in fallback directive")
+	}
+
+	tokens := strings.Fields(parts[0])
+	if len(tokens) < 2 {
+		return fmt.Errorf("fallback directive needs at least two token names")
+	}
+
+	// Find or create the fallback token
+	fallbackToken := p.findOrCreateSymbol(tokens[0])
+	if !fallbackToken.IsTerminal {
+		return fmt.Errorf("fallback token must be a terminal")
+	}
+
+	// Assign this fallback token to all specified tokens
+	for i := 1; i < len(tokens); i++ {
+		sym := p.findOrCreateSymbol(tokens[i])
+		if !sym.IsTerminal {
+			return fmt.Errorf("token '%s' in fallback directive must be a terminal", tokens[i])
+		}
+		sym.Fallback = fallbackToken
+	}
+
 	return nil
 }
 
@@ -476,7 +504,35 @@ func (p *Parser) handleToken(args string) error {
 
 // handleType processes the %type directive
 func (p *Parser) handleType(args string) error {
-	// TODO: Implement type directive handler
+	// The type directive takes the form: %type name {type}
+	// It defines the data type of a non-terminal symbol
+	parts := strings.SplitN(args, "{", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("missing type specification in type directive")
+	}
+
+	// Get the symbol name
+	symbolName := strings.TrimSpace(parts[0])
+	if symbolName == "" {
+		return fmt.Errorf("missing symbol name in type directive")
+	}
+
+	// Get the type specification
+	typeSpec := strings.TrimSpace(parts[1])
+	if !strings.HasSuffix(typeSpec, "}") {
+		return fmt.Errorf("missing closing brace in type specification")
+	}
+	typeSpec = typeSpec[:len(typeSpec)-1] // Remove the closing brace
+
+	// Find or create the symbol
+	symbol := p.findOrCreateSymbol(symbolName)
+	if symbol.IsTerminal {
+		return fmt.Errorf("%%type directive can only be applied to non-terminals")
+	}
+
+	// Set the symbol type
+	symbol.Type = typeSpec
+
 	return nil
 }
 
@@ -687,6 +743,292 @@ func (p *Parser) processGrammar() error {
 // analyzeGrammar performs grammar analysis
 func (p *Parser) analyzeGrammar() error {
 	// TODO: Implement grammar analysis
+	return nil
+}
+
+// handleSyntaxError processes the %syntax_error directive
+func (p *Parser) handleSyntaxError(args string) error {
+	// The syntax_error directive takes the form: %syntax_error { C code }
+	// It specifies code to run when a syntax error occurs
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("syntax_error directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	// This is a simplified approach; a proper implementation would handle nested braces
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in syntax_error directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.SyntaxError = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleParseAccept processes the %parse_accept directive
+func (p *Parser) handleParseAccept(args string) error {
+	// The parse_accept directive takes the form: %parse_accept { C code }
+	// It specifies code to run when the parser accepts its input
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("parse_accept directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in parse_accept directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.ParseAccept = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleParseFailure processes the %parse_failure directive
+func (p *Parser) handleParseFailure(args string) error {
+	// The parse_failure directive takes the form: %parse_failure { C code }
+	// It specifies code to run when the parser fails to parse the input
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("parse_failure directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in parse_failure directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.ParseFailure = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleStackOverflow processes the %stack_overflow directive
+func (p *Parser) handleStackOverflow(args string) error {
+	// The stack_overflow directive takes the form: %stack_overflow { C code }
+	// It specifies code to run when the parser stack overflows
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("stack_overflow directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in stack_overflow directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.StackOverflow = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleExtraArgument processes the %extra_argument directive
+func (p *Parser) handleExtraArgument(args string) error {
+	// The extra_argument directive takes the form: %extra_argument { type name }
+	// It adds an extra argument to the Parse() function
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("extra_argument directive requires a type specification in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in extra_argument directive")
+	}
+	
+	// Extract the type specification
+	typeSpec := args[1:len(args)-1] // Remove braces
+	typeSpec = strings.TrimSpace(typeSpec)
+	
+	// Store the extra argument type specification
+	p.ExtraArgument = typeSpec
+	
+	return nil
+}
+
+// handleTokenDestructor processes the %token_destructor directive
+func (p *Parser) handleTokenDestructor(args string) error {
+	// The token_destructor directive takes the form: %token_destructor { C code }
+	// It specifies a destructor for all terminal symbols
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("token_destructor directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in token_destructor directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.TokenDestructor = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleDefaultDestructor processes the %default_destructor directive
+func (p *Parser) handleDefaultDestructor(args string) error {
+	// The default_destructor directive takes the form: %default_destructor { C code }
+	// It specifies a default destructor for all non-terminal symbols
+	
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("default_destructor directive requires a code block in braces")
+	}
+	
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in default_destructor directive")
+	}
+	
+	// Store the code block for later use when generating the parser
+	p.DefaultDestructor = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleDestructor processes the %destructor directive
+func (p *Parser) handleDestructor(args string) error {
+	// The destructor directive takes the form: %destructor symbol { C code }
+	// It specifies a destructor for a specific non-terminal symbol
+	
+	// Split the args into symbol name and code block
+	parts := strings.SplitN(args, "{", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("destructor directive requires a symbol name and a code block")
+	}
+	
+	// Extract the symbol name
+	symbolName := strings.TrimSpace(parts[0])
+	if symbolName == "" {
+		return fmt.Errorf("missing symbol name in destructor directive")
+	}
+	
+	// Extract the code block
+	codeBlock := parts[1]
+	if !strings.HasSuffix(codeBlock, "}") {
+		return fmt.Errorf("missing closing brace in destructor directive")
+	}
+	
+	// Find the symbol
+	symbol := p.findOrCreateSymbol(symbolName)
+	if symbol.IsTerminal {
+		return fmt.Errorf("destructor directive can only be applied to non-terminals")
+	}
+	
+	// Store the destructor for the symbol
+	symbol.Destructor = codeBlock[:len(codeBlock)-1] // Remove the closing brace
+	
+	return nil
+}
+
+// handleInclude processes the %include directive
+func (p *Parser) handleInclude(args string) error {
+	// The include directive takes the form: %include { C code }
+	// It specifies C code to be included at the top of the generated parser
+
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("include directive requires a code block in braces")
+	}
+
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in include directive")
+	}
+
+	// Extract and store the include code
+	p.IncludeCode = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleCode processes the %code directive
+func (p *Parser) handleCode(args string) error {
+	// The code directive takes the form: %code { C code }
+	// It specifies C code to be included at the end of the generated parser
+
+	// Check if the argument starts with an opening brace
+	if !strings.HasPrefix(args, "{") {
+		return fmt.Errorf("code directive requires a code block in braces")
+	}
+
+	// Find the matching closing brace
+	if !strings.HasSuffix(args, "}") {
+		return fmt.Errorf("missing closing brace in code directive")
+	}
+
+	// Extract and store the code
+	p.ExtraCode = args[1:len(args)-1] // Remove braces
+	
+	return nil
+}
+
+// handleStackSize processes the %stack_size directive
+func (p *Parser) handleStackSize(args string) error {
+	// The stack_size directive takes the form: %stack_size number
+	// It specifies the maximum size of the parser stack
+
+	// Trim whitespace
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return fmt.Errorf("stack_size directive requires a number")
+	}
+
+	// Parse the stack size value
+	stackSize, err := strconv.Atoi(args)
+	if err != nil {
+		return fmt.Errorf("invalid stack size value: %v", err)
+	}
+
+	// Check if the stack size is valid
+	if stackSize <= 0 {
+		return fmt.Errorf("stack size must be a positive integer")
+	}
+
+	// Store the stack size for use when generating the parser
+	p.StackSize = stackSize
+	
+	return nil
+}
+
+// handleWildcard processes the %wildcard directive
+func (p *Parser) handleWildcard(args string) error {
+	// The wildcard directive takes the form: %wildcard TOKEN.
+	// It specifies a token that matches any input token
+
+	// Extract token name until we hit a period
+	parts := strings.Split(args, ".")
+	if len(parts) < 1 {
+		return fmt.Errorf("missing period in wildcard directive")
+	}
+
+	// Get the token name
+	tokenName := strings.TrimSpace(parts[0])
+	if tokenName == "" {
+		return fmt.Errorf("missing token name in wildcard directive")
+	}
+
+	// Find or create the token
+	wildcardToken := p.createTerminal(tokenName)
+	if wildcardToken == nil {
+		return fmt.Errorf("invalid wildcard token name")
+	}
+
+	// Set the wildcard token
+	p.WildcardSym = wildcardToken
+
 	return nil
 }
 
