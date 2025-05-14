@@ -880,6 +880,10 @@ func (p *Parser) parseRule(line string, lineNo int) (*Rule, error) {
 	
 	// Split the RHS into tokens
 	rhsTokens := strings.Fields(rhs)
+	
+	// An empty RHS represents an epsilon production
+	// This is handled correctly by leaving the Rhs slice empty
+	
 	for _, token := range rhsTokens {
 		symbol, alias, err := p.parseSymbol(token)
 		if err != nil {
@@ -909,6 +913,13 @@ func (p *Parser) parseSymbol(name string) (*Symbol, string, error) {
 			return nil, "", fmt.Errorf("missing closing parenthesis in alias")
 		}
 		alias = aliasPart[:len(aliasPart)-1]
+	}
+	
+	// Check for explicit epsilon symbol representation (like '.' or 'EPSILON')
+	if name == "." {
+		// This is an explicit representation of epsilon
+		// We just ignore it as we represent epsilon by empty RHS
+		return nil, "", fmt.Errorf("use empty right-hand side for epsilon productions instead of '.'")
 	}
 	
 	// Find or create the symbol
@@ -1311,20 +1322,29 @@ func (p *Parser) computeClosure(configs []*Configuration) []*Configuration {
 				continue
 			}
 			
+			// Special handling for epsilon productions (rules with empty RHS)
+			// For each rule where the LHS is the nonterminal after the dot
+			// If the rule is an epsilon production, create a config with dot at the end
+			
 			// For each rule with this non-terminal as LHS
 			for _, rule := range p.Rule {
 				if rule.Lhs != sym {
 					continue
 				}
 				
-				// Create a new configuration with the dot at the beginning
+				// Create a new configuration 
 				newConfig := &Configuration{
 					Rp:        rule,
-					Dot:       0,
+					Dot:       0, // Dot at the beginning for normal rules
 					FollowSet: make([]int, 0), // Will compute later
 					FwSet:     make([]int, 0),  // Will compute later
 					BasisFlag: false, // This is not a basis config
 					RuleID:    rule.RuleNum,
+				}
+				
+				// For epsilon productions, put the dot at the end (since there are no RHS symbols)
+				if len(rule.Rhs) == 0 {
+					newConfig.Dot = 0 // Still 0, but clarifies that this is an epsilon production
 				}
 				
 				// Check if this configuration already exists
