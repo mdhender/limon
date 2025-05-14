@@ -12,7 +12,7 @@ func (p *Parser) generateParsingTables() string {
 		return "/* No states in the state machine */\n"
 	}
 
-	// Generate the parsing tables
+	// Generate the parsing tables using compression
 	result := "/* The action table */\n"
 	result += "static const YYACTIONTYPE yy_action[] = {\n"
 
@@ -21,126 +21,21 @@ func (p *Parser) generateParsingTables() string {
 	nSymbols := p.Nsymbol
 	nTerminals := p.countTerminals()
 
-	// Create action and goto tables
-	actionTable := make([][]int, nStates)
-	gotoTable := make([][]int, nStates)
-
-	// Initialize tables with error/no-action values
-	for i := 0; i < nStates; i++ {
-		actionTable[i] = make([]int, nTerminals)
-		gotoTable[i] = make([]int, nSymbols-nTerminals)
-
-		// Fill with -1 (error/no action)
-		for j := 0; j < nTerminals; j++ {
-			actionTable[i][j] = -1
-		}
-		for j := 0; j < nSymbols-nTerminals; j++ {
-			gotoTable[i][j] = -1
-		}
-	}
-
-	// Fill the tables by iterating through states and their actions
-	for _, state := range p.StateSet.States {
-		stateNum := state.StateNum
-
-		// Process terminal symbol actions (shift, reduce, accept, error)
-		for _, action := range state.Actions {
-			// Skip actions for non-terminals
-			if !action.Sp.IsTerminal {
-				continue
-			}
-
-			symbolIndex := action.Sp.Index
-
-			// Encode action type and value
-			var actionCode int
-			switch action.Type {
-			case SHIFT:
-				// Shift actions are encoded as positive state numbers
-				actionCode = action.X // The state to shift to
-			case REDUCE:
-				// Reduce actions are encoded as negative rule numbers
-				actionCode = -action.X - 1 // The rule to reduce by (-1 to avoid conflict with ERROR)
-			case ACCEPT:
-				// Accept is a special code
-				actionCode = -9999 // Use a very negative number for accept
-			case ERROR:
-				// Error remains -1
-				actionCode = -1
-			}
-
-			// Store action in the table
-			actionTable[stateNum][symbolIndex] = actionCode
-		}
-
-		// Process non-terminal actions (goto)
-		for sym, gotoState := range state.Goto {
-			// Skip terminal symbols
-			if sym.IsTerminal {
-				continue
-			}
-
-			// Non-terminal symbols have their own indices
-			nontermIndex := sym.Index - nTerminals
-			if nontermIndex >= 0 {
-				gotoTable[stateNum][nontermIndex] = gotoState.StateNum
-			}
-		}
-	}
-
-	// Build a combined action and goto table as required by the Lemon template
-	actionsArr := make([]int, 0, nStates*(nTerminals+nSymbols-nTerminals+2))
-
-	// For each state, we need:
-	// 1. The base offset for the action table entries
-	// 2. The base offset for the goto table entries
-	// 3. The number of terminal entries
-	// 4. The number of non-terminal entries
-	actOffsets := make([]int, nStates)
-	gotoOffsets := make([]int, nStates)
-
-	// Track the current offset as we build the table
-	offset := 0
-
-	// For each state, add its action and goto entries
-	for stateNum := 0; stateNum < nStates; stateNum++ {
-		// Record the action offset for this state
-		actOffsets[stateNum] = offset
-
-		// Add actions for terminals
-		actionsInState := 0
-		for termIndex := 0; termIndex < nTerminals; termIndex++ {
-			act := actionTable[stateNum][termIndex]
-			if act != -1 {
-				actionsArr = append(actionsArr, termIndex) // Symbol index
-				actionsArr = append(actionsArr, act)       // Action code
-				actionsInState++
-				offset += 2
-			}
-		}
-
-		// Record the goto offset for this state
-		gotoOffsets[stateNum] = offset
-
-		// Add gotos for non-terminals
-		for nontermIndex := 0; nontermIndex < nSymbols-nTerminals; nontermIndex++ {
-			gotoVal := gotoTable[stateNum][nontermIndex]
-			if gotoVal != -1 {
-				actionsArr = append(actionsArr, nontermIndex+nTerminals) // Symbol index
-				actionsArr = append(actionsArr, gotoVal)                // State to go to
-				offset += 2
-			}
-		}
-	}
+	// Compress the tables
+	actionsTable, actOffsets, gotoOffsets := p.compressActionTable()
 
 	// Generate the action table as C code
-	for i, action := range actionsArr {
-		if i%8 == 0 {
+	for i, entry := range actionsTable {
+		if i%4 == 0 {
 			result += "  "
 		}
-		result += fmt.Sprintf("%d, ", action)
-		if i%8 == 7 || i == len(actionsArr)-1 {
-			result += fmt.Sprintf(" /* %d */\n", i-i%8)
+		value := 0
+		if entry.Lookahead >= 0 {
+			value = entry.Action
+		}
+		result += fmt.Sprintf("%d, ", value)
+		if i%4 == 3 || i == len(actionsTable)-1 {
+			result += fmt.Sprintf(" /* %d */\n", i-i%4)
 		}
 	}
 	result += "};\n\n"
@@ -177,15 +72,11 @@ func (p *Parser) generateParsingTables() string {
 	result += "/* The LALR(1) lookahead sets */\n"
 	result += "static const YYCODETYPE yy_lookahead[] = {\n"
 
-	// Extract lookaheads from configurations
-	lookaheads := make([]int, 0)
-	for _, state := range p.StateSet.States {
-		for _, config := range state.Configs {
-			for _, la := range config.FollowSet {
-				if !contains(lookaheads, la) {
-					lookaheads = append(lookaheads, la)
-				}
-			}
+	// Extract lookaheads from action table entries
+	lookaheads := make([]int, 0, len(actionsTable))
+	for _, entry := range actionsTable {
+		if entry.Lookahead >= 0 {
+			lookaheads = append(lookaheads, entry.Lookahead)
 		}
 	}
 
@@ -215,6 +106,15 @@ func (p *Parser) generateParsingTables() string {
 	result += fmt.Sprintf("#define YY_REDUCE_MAX %d\n", p.Nrule-1)
 	result += fmt.Sprintf("#define YYERRORSYMBOL %d\n", p.ErrorSym.Index)
 	result += fmt.Sprintf("#define YYNOCODE %d\n", nSymbols)
+
+	// Print statistics about compression if Stats is true
+	if p.Stats {
+		origSize := nStates * (nTerminals + nSymbols - nTerminals)
+		compSize := len(actionsTable)
+		compRatio := float64(compSize) / float64(origSize)
+		fmt.Printf("Table compression: %d bytes to %d bytes (%.2f%%)\n", 
+			origSize, compSize, 100*compRatio)
+	}
 
 	return result
 }

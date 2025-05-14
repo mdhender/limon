@@ -17,6 +17,7 @@ func main() {
 		templateFilePtr = flag.String("T", "", "Template file (if not specified, uses embedded template)")
 		showHelpPtr = flag.Bool("?", false, "Show help")
 		showVersionPtr = flag.Bool("x", false, "Show version")
+		statsFlagPtr = flag.Bool("s", false, "Show statistics about table generation")
 	)
 
 	flag.Parse()
@@ -46,8 +47,14 @@ func main() {
 	p := parser.New()
 	p.Basisflag = *baseFlagPtr
 	p.NoResort = *noCompressFlagPtr
-	p.Outdir = *outputDirPtr
+	// Use the 'generated' directory by default to avoid cluttering with C files
+	if *outputDirPtr == "" {
+		p.Outdir = "generated"
+	} else {
+		p.Outdir = *outputDirPtr
+	}
 	p.TemplateFile = *templateFilePtr
+	p.Stats = *statsFlagPtr
 	err := p.GenerateParser(grammarFile)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
