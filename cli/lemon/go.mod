@@ -1,3 +1,3 @@
 module github.com/mdhender/limon
 
-go 1.24.1
+go 1.12
