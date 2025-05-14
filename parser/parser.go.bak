@@ -326,6 +326,17 @@ func (p *Parser) generateDefines() string {
 	return result
 }
 
+// generateParsingTables is implemented in parse_table_gen.go
+func (p *Parser) generateParsingTables() string {
+	// This would generate action tables, lookahead tables, etc.
+	result := "/* The action table */\n"
+	result += "static const YYACTIONTYPE yy_action[] = {\n"
+	// TODO: Generate the actual action table
+	result += "  0,  /* 0 */\n"
+	result += "};\n\n"
+	return result
+}
+
 // generateFallbacks generates the fallback table
 func (p *Parser) generateFallbacks() string {
 	// This would list fallback tokens
@@ -1916,14 +1927,4 @@ func isUpper(r rune) bool {
 
 func isLower(r rune) bool {
 	return unicode.IsLower(r)
-}
-
-// contains checks if an int slice contains a value
-func contains(slice []int, val int) bool {
-	for _, item := range slice {
-		if item == val {
-			return true
-		}
-	}
-	return false
 }
