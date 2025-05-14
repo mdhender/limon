@@ -32,6 +32,17 @@ type Parser struct {
 	IncludePath    string // Directory for inclusion preprocessor
 	Outdir         string // Directory where files are written
 	TemplateFile   string // Template file
+	
+	// Advanced options
+	MakeHeaders    bool   // Output a makeheaders compatible file
+	NoLineNos      bool   // Do not print #line statements
+	PrintGrammar   bool   // Print grammar without actions
+	PrintPreprocess bool  // Print input file after preprocessing
+	SQL            bool   // Generate an SQLite3 table of parser statistics
+	
+	// Debug options
+	Debug          bool   // Enable debug output during parser generation
+	Trace          bool   // Enable trace output in the generated parser
 
 	// Parser state
 	Nrule          int      // Number of rules
@@ -226,6 +237,22 @@ func (p *Parser) writeOutput() error {
 		return fmt.Errorf("error generating header file: %v", err)
 	}
 
+	// Generate a makeheaders-compatible file if requested
+	if p.MakeHeaders {
+		err = p.generateMakeheadersFile()
+		if err != nil {
+			return fmt.Errorf("error generating makeheaders file: %v", err)
+		}
+	}
+
+	// Generate SQLite3 output if requested
+	if p.SQL {
+		err = p.generateSQLFile()
+		if err != nil {
+			return fmt.Errorf("error generating SQL file: %v", err)
+		}
+	}
+
 	// Generate the report file if not quiet
 	if !p.Quiet {
 		err = p.printReport()
@@ -319,10 +346,22 @@ func (p *Parser) generateIncludeCode() string {
 
 // generateDefines generates the control #defines section
 func (p *Parser) generateDefines() string {
-	// This would generate YYCODETYPE, YYNOCODE, etc.
+	// This generates YYCODETYPE, YYNOCODE, etc.
 	result := "/* These constants specify the various numeric values for terminal symbols\n"
 	result += "** and nonterminal symbols, as well as the action codes used\n"
 	result += "** in the action table */\n"
+	
+	// Add debugging/tracing support if requested
+	if p.Debug {
+		result += "#define LEMON_DEBUG 1\n"
+	}
+	
+	if p.Trace {
+		result += "#define LEMON_TRACE 1\n"
+		result += "#define YYERRORSYMBOL " + fmt.Sprintf("%d\n", p.ErrorSym.Index)
+		result += "#define YYWILDCARD " + fmt.Sprintf("%d\n", p.WildcardSym.Index)
+	}
+	
 	return result
 }
 
