@@ -51,219 +51,222 @@ func NewActionTable(nsymbol, nterminal int) *ActionTable {
 	}
 }
 
-// CreateTransaction creates a new transaction set for a state
+// CreateTransaction creates a new transaction set
 func CreateTransaction() *transactionSet {
 	return &transactionSet{
 		lookaheads:    make([]int, 0),
 		actions:       make([]int, 0),
-		minLookahead:  0,
-		maxLookahead:  0,
-		defaultAction: NOT_USED,
+		minLookahead:  99999,  // Initialize to high value
+		maxLookahead: -99999, // Initialize to low value
+		defaultAction: -1,     // Default is error action
 	}
 }
 
-// AddAction adds an action for a specific lookahead to the transaction set
+// AddAction adds an action to the transaction set
 func (ts *transactionSet) AddAction(lookahead, action int) {
-	// Update min/max lookahead values
-	if len(ts.lookaheads) == 0 {
-		ts.minLookahead = lookahead
-		ts.maxLookahead = lookahead
-	} else {
-		if lookahead < ts.minLookahead {
-			ts.minLookahead = lookahead
-		}
-		if lookahead > ts.maxLookahead {
-			ts.maxLookahead = lookahead
+	// Check if lookahead already exists
+	for i, la := range ts.lookaheads {
+		if la == lookahead {
+			// Replace the action if it already exists
+			ts.actions[i] = action
+			return
 		}
 	}
 	
-	// Add the lookahead and action
+	// Add the new lookahead and action
 	ts.lookaheads = append(ts.lookaheads, lookahead)
 	ts.actions = append(ts.actions, action)
+	
+	// Update min/max
+	if lookahead < ts.minLookahead {
+		ts.minLookahead = lookahead
+	}
+	if lookahead > ts.maxLookahead {
+		ts.maxLookahead = lookahead
+	}
 }
 
-// FindDefaultAction determines if there's a common action that can be used as default
-func (ts *transactionSet) FindDefaultAction() bool {
+// FindDefaultAction determines a default action for this transaction set
+func (ts *transactionSet) FindDefaultAction() {
+	// Initialize default action to error
+	ts.defaultAction = -1
+	
+	// Count the number of times each action occurs
+	actCounts := make(map[int]int)
+	for _, action := range ts.actions {
+		actCounts[action]++
+	}
+	
+	// Find the most frequent action
+	maxCount := 0
+	maxAction := -1
+	for action, count := range actCounts {
+		if count > maxCount {
+			maxCount = count
+			maxAction = action
+		}
+	}
+	
+	// Set the default action to the most frequent action
+	if maxCount > 1 { // Only use default if it saves us at least one entry
+		ts.defaultAction = maxAction
+	}
+}
+
+// Size returns the number of entries in the transaction set
+func (ts *transactionSet) Size() int {
+	return len(ts.lookaheads)
+}
+
+// GetAction returns the action for a given lookahead
+func (ts *transactionSet) GetAction(lookahead int) int {
+	// Find the lookahead
+	for i, la := range ts.lookaheads {
+		if la == lookahead {
+			return ts.actions[i]
+		}
+	}
+	
+	// Return the default action if lookahead not found
+	return ts.defaultAction
+}
+
+// RemoveAction removes an action from the transaction set
+func (ts *transactionSet) RemoveAction(lookahead int) {
+	// Find the lookahead
+	for i, la := range ts.lookaheads {
+		if la == lookahead {
+			// Remove it
+			ts.lookaheads = append(ts.lookaheads[:i], ts.lookaheads[i+1:]...)
+			ts.actions = append(ts.actions[:i], ts.actions[i+1:]...)
+			
+			// Update min/max (may need to recalculate)
+			if lookahead == ts.minLookahead || lookahead == ts.maxLookahead {
+				ts.minLookahead = 99999
+				ts.maxLookahead = -99999
+				for _, la := range ts.lookaheads {
+					if la < ts.minLookahead {
+						ts.minLookahead = la
+					}
+					if la > ts.maxLookahead {
+						ts.maxLookahead = la
+					}
+				}
+			}
+			break
+		}
+	}
+}
+
+// GetIsSparse returns true if the action table is sparse
+func (ts *transactionSet) GetIsSparse() bool {
+	// If there are no actions, it's not sparse
 	if len(ts.lookaheads) == 0 {
 		return false
 	}
 	
-	// Count occurrences of each action
-	actionCounts := make(map[int]int)
-	for _, action := range ts.actions {
-		actionCounts[action]++
-	}
+	// Calculate density
+	range_size := ts.maxLookahead - ts.minLookahead + 1
+	density := float64(len(ts.lookaheads)) / float64(range_size)
 	
-	// Find the most common action
-	bestAction := ts.actions[0]
-	bestCount := actionCounts[bestAction]
-	
-	for action, count := range actionCounts {
-		if count > bestCount {
-			bestAction = action
-			bestCount = count
-		}
-	}
-	
-	// If the best action occurs multiple times, use it as default
-	if bestCount > 1 {
-		ts.defaultAction = bestAction
-		return true
-	}
-	
-	return false
+	// If density is less than 0.5, it's considered sparse
+	return density < 0.5
 }
 
-// Insert adds a transaction set to the action table, finding the best offset
-// Returns the offset where the transaction was inserted
+// Insert adds a transaction set to the action table
 func (at *ActionTable) Insert(ts *transactionSet, makeItSafe bool) int {
-	minLookahead := ts.minLookahead
-	maxLookahead := ts.maxLookahead
-	spread := maxLookahead - minLookahead + 1
+	// If no actions to insert, return 0
+	if ts.Size() == 0 {
+		return 0
+	}
 	
-	// Make sure we have enough space
-	neededSize := at.nAction + spread + at.nsymbol
-	if neededSize > len(at.actions) {
-		// Grow the table
-		newSize := neededSize + len(at.actions)/2 + 20
-		newActions := make([]ActionTableEntry, newSize)
-		
-		// Copy existing entries
-		copy(newActions, at.actions)
-		
-		// Initialize new entries
-		for i := len(at.actions); i < newSize; i++ {
-			newActions[i].Lookahead = NOT_USED
-			newActions[i].Action = NOT_USED
+	// Optimize: pre-compute non-default actions
+	nonDefaults := make(map[int]int) // map[lookahead]action
+	for i, la := range ts.lookaheads {
+		// Only keep actions that are different from the default
+		if ts.actions[i] != ts.defaultAction {
+			nonDefaults[la] = ts.actions[i]
 		}
+	}
+	
+	// Find the best place to insert the transaction set
+	best_offset := 0
+	best_collisions := 9999
+	
+	// Try different offsets to find the best fit
+	for offset := 0; offset < at.nAction+len(nonDefaults)+10; offset++ {
+		collisions := 0
 		
-		at.actions = newActions
-	}
-	
-	// Find the best offset for this transaction set
-	bounds := 0
-	if makeItSafe {
-		// For terminal symbols, we're more cautious about offset selection
-		bounds = minLookahead
-	}
-	
-	// First try to find an exact match in the existing table
-	found := false
-	bestOffset := 0
-	
-	// Check each possible offset to see if this transaction already exists
-	for i := at.nAction - 1; i >= bounds; i-- {
-		if at.actions[i].Lookahead == minLookahead {
-			// This could be a match - check all entries
-			match := true
+		// Check each non-default action
+		for la := range nonDefaults {
+			// Calculate the index in the action table
+			table_index := offset + la
 			
-			for j := 0; j < len(ts.lookaheads); j++ {
-				lookahead := ts.lookaheads[j]
-				action := ts.actions[j]
+			// Ensure we have enough space in the action table
+			if table_index >= len(at.actions) {
+				// Resize the action table
+				new_size := table_index + 100
+				new_actions := make([]ActionTableEntry, new_size)
+				copy(new_actions, at.actions)
 				
-				// Compute offset into action table
-				k := lookahead - minLookahead + i
+				// Initialize new entries
+				for i := len(at.actions); i < new_size; i++ {
+					new_actions[i].Lookahead = NOT_USED
+					new_actions[i].Action = NOT_USED
+				}
 				
-				// Check if this slot exists and matches
-				if k < 0 || k >= at.nAction || 
-				   at.actions[k].Lookahead != lookahead || 
-				   at.actions[k].Action != action {
-					match = false
-					break
-				}
+				at.actions = new_actions
 			}
 			
-			if match {
-				found = true
-				bestOffset = i - minLookahead
-				break
+			// Check if there's a collision at this offset
+			if at.actions[table_index].Lookahead != NOT_USED {
+				collisions++
+			}
+		}
+		
+		// If this offset has fewer collisions, it's the new best
+		if collisions < best_collisions {
+			best_collisions = collisions
+			best_offset = offset
+			
+			if collisions == 0 {
+				break // Perfect fit, no need to search further
 			}
 		}
 	}
 	
-	// If no match found, look for an empty slot
-	if !found {
-		for i := bounds; i < len(at.actions) - (maxLookahead - minLookahead); i++ {
-			// Check if this position has enough empty slots
-			hasRoom := true
+	// Now insert the transaction set at the best offset
+	for la, action := range nonDefaults {
+		table_index := best_offset + la
+		
+		// Ensure we have enough space in the action table
+		if table_index >= len(at.actions) {
+			// Resize the action table
+			new_size := table_index + 100
+			new_actions := make([]ActionTableEntry, new_size)
+			copy(new_actions, at.actions)
 			
-			for j := 0; j < len(ts.lookaheads); j++ {
-				lookahead := ts.lookaheads[j]
-				k := lookahead - minLookahead + i
-				
-				// Make sure this slot is unused
-				if k < 0 || at.actions[k].Lookahead != NOT_USED {
-					hasRoom = false
-					break
-				}
-			}
-			
-			// Also make sure no existing entry would conflict
-			if hasRoom {
-				for j := 0; j < at.nAction; j++ {
-					if at.actions[j].Lookahead >= 0 {
-						// Check if this lookahead would map to one of our slots
-						if at.actions[j].Lookahead == j + minLookahead - i {
-							hasRoom = false
-							break
-						}
-					}
-				}
+			// Initialize new entries
+			for i := len(at.actions); i < new_size; i++ {
+				new_actions[i].Lookahead = NOT_USED
+				new_actions[i].Action = NOT_USED
 			}
 			
-			if hasRoom {
-				bestOffset = i - minLookahead
-				break
-			}
+			at.actions = new_actions
 		}
 		
-		// If we get here and bestOffset is still 0, we'll append to the end
-		if bestOffset == 0 && !found {
-			bestOffset = at.nAction - minLookahead
-		}
-	}
-	
-	// Insert the transaction set at the chosen offset
-	for j := 0; j < len(ts.lookaheads); j++ {
-		lookahead := ts.lookaheads[j]
-		action := ts.actions[j]
+		// Insert the entry
+		at.actions[table_index].Lookahead = la
+		at.actions[table_index].Action = action
 		
-		// If this action equals the default action, we can skip it
-		if action == ts.defaultAction {
-			continue
-		}
-		
-		// Compute position in the table
-		k := lookahead - minLookahead + bestOffset + minLookahead
-		
-		// Insert the action
-		at.actions[k].Lookahead = lookahead
-		at.actions[k].Action = action
-		
-		// Update the table size if needed
-		if k >= at.nAction {
-			at.nAction = k + 1
+		// Update nAction to reflect the highest used index
+		if table_index >= at.nAction {
+			at.nAction = table_index + 1
 		}
 	}
 	
-	// If we're making it safe for terminals, ensure we have enough space
-	if makeItSafe && bestOffset + minLookahead + at.nterminal >= at.nAction {
-		at.nAction = bestOffset + minLookahead + at.nterminal + 1
-	}
-	
-	return bestOffset + minLookahead
-}
-
-// Size returns the actual size of the action table (ignoring trailing empty entries)
-func (at *ActionTable) Size() int {
-	n := at.nAction
-	
-	// Trim unused trailing entries
-	for n > 0 && at.actions[n-1].Lookahead < 0 {
-		n--
-	}
-	
-	return n
+	// Return the offset for this transaction set
+	return best_offset
 }
 
 // compressActionTable takes the State set and generates compressed action and goto tables
@@ -282,7 +285,7 @@ func (p *Parser) compressActionTable() ([]ActionTableEntry, []int, []int) {
 		
 		for _, action := range state.Actions {
 			// Skip actions for non-terminals
-			if !action.Sp.IsTerminal {
+			if action.Sp != nil && !action.Sp.IsTerminal {
 				continue
 			}
 			
@@ -300,7 +303,12 @@ func (p *Parser) compressActionTable() ([]ActionTableEntry, []int, []int) {
 			}
 			
 			// Add to the transaction set
-			terminalTrans.AddAction(action.Sp.Index, actionCode)
+			if action.Sp == nil {
+				// End of input symbol (for ACCEPT actions)
+				terminalTrans.AddAction(0, actionCode)
+			} else {
+				terminalTrans.AddAction(action.Sp.Index, actionCode)
+			}
 		}
 		
 		// Find a default action if possible
@@ -329,43 +337,5 @@ func (p *Parser) compressActionTable() ([]ActionTableEntry, []int, []int) {
 		gotoOffsets[state.StateNum] = at.Insert(nonterminalTrans, false)
 	}
 	
-	// Build the final arrays
-	actSize := at.Size()
-	actionsArr := make([]ActionTableEntry, actSize)
-	
-	// Copy the action table
-	copy(actionsArr, at.actions[:actSize])
-	
-	// Determine the default actions for each state
-	defaultActions := make([]int, p.StateSet.NState)
-	for i := range defaultActions {
-		defaultActions[i] = -1 // No default action initially
-	}
-	
-	// Find states that can use default reductions
-	for _, state := range p.StateSet.States {
-		bestReduceCount := 0
-		bestReduceRule := -1
-		
-		// Count frequency of reduce actions
-		reduceCounts := make(map[int]int)
-		
-		for _, action := range state.Actions {
-			if action.Type == REDUCE {
-				reduceCounts[action.X]++
-				
-				if reduceCounts[action.X] > bestReduceCount {
-					bestReduceCount = reduceCounts[action.X]
-					bestReduceRule = action.X
-				}
-			}
-		}
-		
-		// If a rule is used frequently, make it the default
-		if bestReduceCount > 1 {
-			defaultActions[state.StateNum] = -bestReduceRule - 1
-		}
-	}
-	
-	return actionsArr, actionOffsets, gotoOffsets
+	return at.actions[:at.nAction], actionOffsets, gotoOffsets
 }

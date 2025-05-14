@@ -359,7 +359,13 @@ func (p *Parser) generateDefines() string {
 	
 	if p.Trace {
 		result += "#define LEMON_TRACE 1\n"
-		result += "#define YYERRORSYMBOL " + fmt.Sprintf("%d\n", p.ErrorSym.Index)
+	}
+	
+	// Add error symbol definition
+	result += "#define YYERRORSYMBOL " + fmt.Sprintf("%d\n", p.ErrorSym.Index)
+	
+	// Add wildcard symbol definition if a wildcard symbol has been defined
+	if p.WildcardSym != nil {
 		result += "#define YYWILDCARD " + fmt.Sprintf("%d\n", p.WildcardSym.Index)
 	}
 	
@@ -1536,6 +1542,39 @@ func (p *Parser) createActionsForState(state *State) {
 				}
 				state.NTActions = append(state.NTActions, action)
 			}
+		}
+	}
+	
+	// Add wildcard actions if a wildcard symbol has been defined
+	if p.WildcardSym != nil {
+		// For each terminal symbol that has a shift action, add a wildcard action
+		// We only do this for shift actions, not reduce actions
+		
+		// First collect all terminals that have shift actions in this state
+		shiftActions := make(map[*Symbol]*Action)
+		for _, action := range state.Actions {
+			if action.Type == SHIFT && action.Sp != nil && action.Sp.IsTerminal {
+				shiftActions[action.Sp] = action
+			}
+		}
+		
+		// If we have any shift actions, add a wildcard action that does the same shift
+		if len(shiftActions) > 0 {
+			// Use the first shift action as the basis for the wildcard action
+			// We can pick any shift action since they should all lead to the same state
+			// for a wildcard match
+			var wildcardAction *Action
+			for _, action := range shiftActions {
+				wildcardAction = &Action{
+					Sp:   p.WildcardSym,
+					Type: SHIFT,
+					X:    action.X, // Use the destination state from a shift action
+				}
+				break
+			}
+			
+			// Add the wildcard action to the state actions
+			state.Actions = append(state.Actions, wildcardAction)
 		}
 	}
 }

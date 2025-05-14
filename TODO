@@ -23,7 +23,7 @@ Here are the key steps left to complete the Lemon parser generator Go implementa
 6.3. Document special cases like fallback tokens, epsilon productions, and wildcard tokens
 6.4. Add template customization guidelines (especially for preserving special features)
 7. Special Cases
-7.1. Complete support for wildcard tokens
+7.1. ✅ Complete support for wildcard tokens
 7.2. ✅ Fully implement fallback tokens
 7.3. ✅ Handle epsilon productions correctly
 8. Performance Optimization
